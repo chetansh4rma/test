@@ -1,7 +1,7 @@
 import logging
 from .server import FHIRServer, FHIRUnauthorizedException, FHIRNotFoundException
 
-__version__ = '4.3.1'
+__version__ = '4.3.2'  # Update docs/Doxyfile too when you bump this
 __author__ = 'SMART Platforms Team'
 __license__ = 'APACHE2'
 __copyright__ = "Copyright 2017 Boston Children's Hospital"
