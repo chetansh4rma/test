@@ -159,19 +159,18 @@ class FHIRServer(object):
         :throws: Exception on HTTP status >= 400
         :returns: Decoded JSON response
         """
-        headers = {'Accept': 'application/json'}
-        res = self._get(path, headers, nosign)
+        res = self._get(path, nosign=nosign)
         
         return res.json()
     
-    def request_data(self, path, headers={}, nosign=False):
+    def request_data(self, path, headers=None, nosign=False):
         """ Perform a data request data against the server's base with the
         given relative path.
         """
-        res = self._get(path, headers, nosign)
+        res = self._get(path, headers=headers, nosign=nosign)
         return res.content
     
-    def _get(self, path, headers={}, nosign=False):
+    def _get(self, path, headers=None, nosign=False):
         """ Issues a GET request.
         
         :returns: The response object
@@ -184,7 +183,8 @@ class FHIRServer(object):
             'Accept-Charset': 'UTF-8',
         }
         # merge in user headers with defaults
-        header_defaults.update(headers)
+        if headers:
+            header_defaults.update(headers)
         # use the merged headers in the request
         headers = header_defaults
         if not nosign and self.auth is not None and self.auth.can_sign_headers():
@@ -251,10 +251,6 @@ class FHIRServer(object):
         :throws: Exception on HTTP status >= 400
         :returns: The response object
         """
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
-            'Accept': 'application/json',
-        }
         res = self.session.post(url, data=formdata, auth=auth)
         self.raise_for_status(res)
         return res
@@ -276,7 +272,7 @@ class FHIRServer(object):
             headers = self.auth.signed_headers(headers)
         
         # perform the request but intercept 401 responses, raising our own Exception
-        res = self.session.delete(url)
+        res = self.session.delete(url, headers=headers)
         self.raise_for_status(res)
         return res
     

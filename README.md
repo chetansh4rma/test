@@ -53,7 +53,7 @@ patient = Patient.read('2cda5aad-e409-4070-9a15-e1c35c46ed5a', smart.server)
 print(patient.birthDate.isostring)
 # '1992-07-03'
 print(smart.human_name(patient.name[0]))
-# 'Mr. Geoffrey Abbott'
+# 'Mr. steve Smith'
 ```
 If this is a protected server, you will first have to send your user to the authorization endpoint to log in.
 Just call `smart.authorize_url` to obtain the correct URL.
@@ -90,7 +90,7 @@ from fhirclient.models.patient import Patient
 smart = server.FHIRServer(None, 'https://r4.smarthealthit.org')
 patient = Patient.read('2cda5aad-e409-4070-9a15-e1c35c46ed5a', smart)
 print(patient.name[0].given)
-# ['Geoffrey']
+# ['steve']
 ```
 
 ##### Search Records on Server
