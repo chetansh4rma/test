@@ -199,6 +199,18 @@ and install the needed packages as shown:
     ./flask_app.py
 
 
+## See Also
+
+- [cumulus-fhir-support](https://github.com/smart-on-fhir/cumulus-fhir-support/): similar network
+  client, with more authentication options and built-in retries, but no FHIR classes
+- [fhir.resources](https://github.com/nazrulworld/fhir.resources): similar FHIR classes,
+  but has no network client
+- [fhirpy](https://github.com/beda-software/fhir-py): similar FHIR classes and network client,
+  with async options, but has no OAuth support
+- [smart-fetch](https://github.com/smart-on-fhir/smart-fetch): is a CLI command instead of a Python
+  library, but supports bulk export and REST requests
+
+
 [fhir]: http://www.hl7.org/implement/standards/fhir/
 [smart]: http://docs.smarthealthit.org
 [fhir-parser]: https://github.com/smart-on-fhir/fhir-parser
