@@ -5,6 +5,9 @@ import shutil
 import tempfile
 import unittest
 
+import requests
+import responses
+
 from fhirclient import server
 
 
@@ -16,6 +19,24 @@ class TestServer(unittest.TestCase):
             os.path.join(os.path.dirname(__file__), 'data', filename),
             os.path.join(tmpdir, 'metadata')
         )
+
+    @staticmethod
+    def create_server() -> server.FHIRServer:
+        return server.FHIRServer(None, state={
+            'base_uri': "https://example.invalid/",
+            "auth_type": "oauth2",
+            "auth": {
+                "aud": "https://example.invalid/",
+                "registration_uri": "https://example.invalid/o2/registration",
+                "authorize_uri": "https://example.invalid/o2/authorize",
+                "redirect_uri": "https://example.invalid/o2/redirect",
+                "token_uri": "https://example.invalid/o2/token",
+                "auth_state": "931f4c31-73e2-4c04-bf6b-b7c9800312ea",
+                "app_secret": "my-secret",
+                "access_token": "my-access-token",
+                "refresh_token": "my-refresh-token",
+            },
+        })
 
     def testValidCapabilityStatement(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -58,6 +79,49 @@ class TestServer(unittest.TestCase):
                 self.assertEqual("coding.0:", str(e.errors[2].errors[1].errors[0].errors[0])[:9])
                 self.assertEqual("Superfluous entry \"systems\"", str(e.errors[2].errors[1].errors[0].errors[0].errors[0])[:27])
                 self.assertEqual("Superfluous entry \"formats\"", str(e.errors[3])[:27])
+
+    @responses.activate
+    def testRequestJson(self):
+        fhir = self.create_server()
+        fhir.prepare()
+
+        bin1 = {"resourceType": "Binary", "id": "bin1"}
+        mock = responses.add("GET", f"{fhir.base_uri}Binary/bin1", json=bin1)
+
+        resp = fhir.request_json("Binary/bin1")
+        self.assertEqual(resp, bin1)
+        self.assertEqual(mock.calls[0].request.headers["Accept"], "application/fhir+json")
+        self.assertEqual(mock.calls[0].request.headers["Accept-Charset"], "UTF-8")
+        self.assertEqual(mock.calls[0].request.headers["Authorization"], "Bearer my-access-token")
+
+        resp = fhir.request_json("Binary/bin1", nosign=True)
+        self.assertEqual(resp, bin1)
+        self.assertEqual(mock.calls[1].request.headers["Accept"], "application/fhir+json")
+        self.assertEqual(mock.calls[1].request.headers["Accept-Charset"], "UTF-8")
+        self.assertNotIn("Authorization", mock.calls[1].request.headers)
+
+        self.assertEqual(mock.call_count, 2)
+
+    @responses.activate
+    def testDeleteJson(self):
+        fhir = self.create_server()
+        fhir.prepare()
+
+        mock = responses.add("DELETE", f"{fhir.base_uri}Binary/bin1")
+
+        resp = fhir.delete_json("Binary/bin1")
+        self.assertIsInstance(resp, requests.Response)
+        self.assertEqual(mock.calls[0].request.headers["Accept"], "application/fhir+json")
+        self.assertEqual(mock.calls[0].request.headers["Accept-Charset"], "UTF-8")
+        self.assertEqual(mock.calls[0].request.headers["Authorization"], "Bearer my-access-token")
+
+        resp = fhir.delete_json("Binary/bin1", nosign=True)
+        self.assertIsInstance(resp, requests.Response)
+        self.assertEqual(mock.calls[1].request.headers["Accept"], "application/fhir+json")
+        self.assertEqual(mock.calls[1].request.headers["Accept-Charset"], "UTF-8")
+        self.assertNotIn("Authorization", mock.calls[1].request.headers)
+
+        self.assertEqual(mock.call_count, 2)
 
 
 class MockServer(server.FHIRServer):
