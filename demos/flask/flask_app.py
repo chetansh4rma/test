@@ -35,7 +35,7 @@ MAX_SESSIONS = 100000000000000000000000
 
 # app setup with complete OAuth scopes for Epic FHIR
 smart_defaults = {
-    'app_id': '7681bcb1-e734-4900-a344-d243f7158b74',
+    'app_id': '3cc91300-0669-4bed-acd4-311c4218d7ac',
     'api_base': 'https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4/',
     'redirect_uri': 'https://test-3-1hct.onrender.com/fhir-app/',
     'scope': ' '.join([
