@@ -55,7 +55,7 @@ smart_defaults = {
     ])
 }
 
-CLIENT_REDIRECT_URL = 'https://preview--dailycheckin.lovable.app/'
+CLIENT_REDIRECT_URL = 'https://preview--dailycheckin.lovable.app/fhir'
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
