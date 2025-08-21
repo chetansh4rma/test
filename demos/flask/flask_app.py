@@ -31,7 +31,7 @@ session_tokens = {}
 session_lock = threading.Lock()
 
 # Maximum number of concurrent sessions
-MAX_SESSIONS = 20
+MAX_SESSIONS = 100000000000000000000000
 
 # app setup with complete OAuth scopes for Epic FHIR
 smart_defaults = {
@@ -55,7 +55,7 @@ smart_defaults = {
     ])
 }
 
-CLIENT_REDIRECT_URL = 'http://localhost:8080/fhir'
+CLIENT_REDIRECT_URL = 'https://preview--dailycheckin.lovable.app/'
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
