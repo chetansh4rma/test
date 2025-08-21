@@ -37,7 +37,7 @@ MAX_SESSIONS = 100000000000000000000000
 smart_defaults = {
     'app_id': '7681bcb1-e734-4900-a344-d243f7158b74',
     'api_base': 'https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4/',
-    'redirect_uri': 'http://localhost:8000/fhir-app/',
+    'redirect_uri': 'https://test-3-1hct.onrender.com/fhir-app/',
     'scope': ' '.join([
         'user/Observation.read',
         'user/Observation.write',
