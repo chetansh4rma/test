@@ -1438,13 +1438,13 @@ def handle_404(e):
         'session_token': token
     }), 404
 
-if __name__ == '__main__':
-    try:
-        import flaskbeaker
-        flaskbeaker.FlaskBeaker.setup_app(app)
-    except Exception as e:
-        app.logger.warning(f"FlaskBeaker setup failed: {e}")
+# if __name__ == '__main__':
+#     try:
+#         import flaskbeaker
+#         flaskbeaker.FlaskBeaker.setup_app(app)
+#     except Exception as e:
+#         app.logger.warning(f"FlaskBeaker setup failed: {e}")
     
-    logging.basicConfig(level=logging.DEBUG)
-    app.run(debug=True, port=8000)
+#     logging.basicConfig(level=logging.DEBUG)
+#     app.run(debug=True, port=8000)
 
