@@ -146,8 +146,9 @@ class FHIROAuth2Auth(FHIRAuth):
     
     @property
     def ready(self):
-        if self.expires_at and self.expires_at < datetime.now():
+        if self.expires_at and self.expires_at < datetime.now() and self.refresh_token is None:
             self.reset()
+
         return True if self.access_token else False
     
     def reset(self):
