@@ -191,8 +191,16 @@ class FHIRServer(object):
             headers = self.auth.signed_headers(headers)
         
         # perform the request but intercept 401 responses, raising our own Exception
-        res = self.session.get(url, headers=headers)
-        self.raise_for_status(res)
+        try:
+            res = self.session.get(url, headers=headers)
+            self.raise_for_status(res)
+        except FHIRUnauthorizedException as e:
+            if self.auth.reauthorize(self):
+                headers = self.auth.signed_headers(headers)
+                res = self.session.get(url, headers=headers)
+                self.raise_for_status(res)
+            else:
+                raise e
         return res
     
     def put_json(self, path, resource_json, nosign=False):
@@ -215,8 +223,16 @@ class FHIRServer(object):
             headers = self.auth.signed_headers(headers)
         
         # perform the request but intercept 401 responses, raising our own Exception
-        res = self.session.put(url, headers=headers, data=json.dumps(resource_json))
-        self.raise_for_status(res)
+        try:
+            res = self.session.put(url, headers=headers, data=json.dumps(resource_json))
+            self.raise_for_status(res)
+        except FHIRUnauthorizedException as e:
+            if self.auth.reauthorize(self):
+                headers = self.auth.signed_headers(headers)
+                res = self.session.put(url, headers=headers, data=json.dumps(resource_json))
+                self.raise_for_status(res)
+            else:
+                raise e
         return res
     
     def post_json(self, path, resource_json, nosign=False):
@@ -239,8 +255,16 @@ class FHIRServer(object):
             headers = self.auth.signed_headers(headers)
         
         # perform the request but intercept 401 responses, raising our own Exception
-        res = self.session.post(url, headers=headers, data=json.dumps(resource_json))
-        self.raise_for_status(res)
+        try:
+            res = self.session.post(url, headers=headers, data=json.dumps(resource_json))
+            self.raise_for_status(res)
+        except FHIRUnauthorizedException as e:
+            if self.auth.reauthorize(self):
+                headers = self.auth.signed_headers(headers)
+                res = self.session.post(url, headers=headers, data=json.dumps(resource_json))
+                self.raise_for_status(res)
+            else:
+                raise e
         return res
     
     def post_as_form(self, url, formdata, auth=None):
@@ -272,8 +296,16 @@ class FHIRServer(object):
             headers = self.auth.signed_headers(headers)
         
         # perform the request but intercept 401 responses, raising our own Exception
-        res = self.session.delete(url, headers=headers)
-        self.raise_for_status(res)
+        try:
+            res = self.session.delete(url, headers=headers)
+            self.raise_for_status(res)
+        except FHIRUnauthorizedException as e:
+            if self.auth.reauthorize(self):
+                headers = self.auth.signed_headers(headers)
+                res = self.session.delete(url, headers=headers)
+                self.raise_for_status(res)
+            else:
+                raise e
         return res
     
     def raise_for_status(self, response):
