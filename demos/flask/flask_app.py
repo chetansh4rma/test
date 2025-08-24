@@ -34,8 +34,8 @@ load_dotenv()
 
 # MongoDB connection for session storage
 try:
-    # MONGODB_URI = os.environ.get('MONGODB_URI', 'mongodb+srv://chetansharma9878600494:VibJosueveTfLF5V@cluster0.te5mtud.mongodb.net/')
-    mongo_client = MongoClient('mongodb+srv://chetansharma9878600494:VibJosueveTfLF5V@cluster0.te5mtud.mongodb.net/', serverSelectionTimeoutMS=5000)
+    MONGODB_URI = os.environ.get('MONGODB_URI', 'mongodb://localhost:27017/')
+    mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
     # Test connection
     mongo_client.admin.command('ping')
     db = mongo_client['fhir_sessions']
@@ -114,18 +114,33 @@ def delete_session_from_db(token):
     except Exception as e:
         print(f"Error deleting session from DB: {e}")
 
+def get_all_sessions():
+    """Get all active sessions"""
+    if sessions_collection is None:
+        return active_sessions or {}
+    
+    try:
+        sessions = {}
+        for doc in sessions_collection.find({'expires_at': {'$gt': datetime.now()}}):
+            sessions[doc['token']] = doc['data']
+        return sessions
+    except Exception as e:
+        print(f"Error getting all sessions from DB: {e}")
+        return {}
+
 def cleanup_expired_sessions_db():
     """Clean up expired sessions from MongoDB or in-memory storage"""
     if sessions_collection is None:
         # Fallback to in-memory cleanup
-        now = datetime.now()
-        expired_tokens = [
-            token for token, data in active_sessions.items()
-            if now > data.get('expires_at', now)
-        ]
-        for token in expired_tokens:
-            if token in active_sessions:
-                del active_sessions[token]
+        if active_sessions:
+            now = datetime.now()
+            expired_tokens = [
+                token for token, data in active_sessions.items()
+                if now > data.get('expires_at', now)
+            ]
+            for token in expired_tokens:
+                if token in active_sessions:
+                    del active_sessions[token]
         return
     
     try:
@@ -1178,16 +1193,17 @@ def api_reset():
 def list_sessions():
     """Debug endpoint to list active sessions"""
     try:
-        cleanup_expired_sessions()
+        cleanup_expired_sessions_db()
         
         session_info = {}
-        for token, data in active_sessions.items():
+        all_sessions = get_all_sessions()
+        for token, data in all_sessions.items():
             session_info[token[:8] + "..."] = {
                 'session_id': data.get('session_id'),
                 'created_at': data.get('created_at').isoformat() if data.get('created_at') else None,
                 'last_accessed': data.get('last_accessed').isoformat() if data.get('last_accessed') else None,
                 'expires_at': data.get('expires_at').isoformat() if data.get('expires_at') else None,
-                'has_patient': bool(data.get('smart_client') and getattr(data.get('smart_client'), 'patient', None)),
+                'has_patient': False,  # We don't store smart_client anymore
                 'has_tokens': bool(data.get('access_token'))
             }
         
@@ -1195,13 +1211,14 @@ def list_sessions():
         
         return jsonify({
             'current_session_token': current_token[:8] + "..." if current_token else None,
-            'active_sessions_count': len(active_sessions),
+            'active_sessions_count': len(all_sessions),
             'max_sessions': MAX_SESSIONS,
             'sessions': session_info,
             'debug_info': {
-                'multi_session_working': len(active_sessions) >= 0,
+                'multi_session_working': len(all_sessions) >= 0,
                 'isolation_enabled': True,
-                'auto_cleanup_enabled': True
+                'auto_cleanup_enabled': True,
+                'storage_type': 'MongoDB' if sessions_collection is not None else 'In-Memory'
             }
         })
     except Exception as e:
