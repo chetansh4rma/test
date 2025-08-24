@@ -128,6 +128,32 @@ def get_all_sessions():
         print(f"Error getting all sessions from DB: {e}")
         return {}
 
+def find_session_by_oauth_state(oauth_state):
+    """Find session by OAuth state parameter for callback recovery"""
+    if not oauth_state:
+        return None
+    
+    if sessions_collection is None:
+        # Search in-memory storage
+        if active_sessions:
+            for token, data in active_sessions.items():
+                if data.get('oauth_state') == oauth_state:
+                    return token
+        return None
+    
+    try:
+        # Search MongoDB
+        session_doc = sessions_collection.find_one({
+            'data.oauth_state': oauth_state,
+            'expires_at': {'$gt': datetime.now()}
+        })
+        if session_doc:
+            return session_doc['token']
+        return None
+    except Exception as e:
+        app.logger.error(f"Error finding session by OAuth state: {e}")
+        return None
+
 def cleanup_expired_sessions_db():
     """Clean up expired sessions from MongoDB or in-memory storage"""
     if sessions_collection is None:
@@ -318,6 +344,9 @@ def _save_state(state, token):
         if session_data:
             session_data['state'] = state
             session_data['last_accessed'] = datetime.now()
+            # Also save the OAuth state parameter for session recovery
+            if isinstance(state, dict) and 'state' in state:
+                session_data['oauth_state'] = state['state']
             save_session_to_db(token, session_data)
             app.logger.info(f"Saved state for session: {token[:8]}...")
     except Exception as e:
@@ -1251,8 +1280,15 @@ def callback():
             state_param = request.args.get('state')
             if state_param:
                 app.logger.warning(f"Attempting session recovery with state: {state_param[:20]}...")
-                # For now, create emergency session as last resort
-                token = create_new_session()
+                recovered_token = find_session_by_oauth_state(state_param)
+                if recovered_token:
+                    token = recovered_token
+                    app.logger.info(f"Successfully recovered session: {token[:8]}...")
+                    # Update Flask session with recovered token
+                    session['session_token'] = token
+                    session.permanent = True
+                else:
+                    app.logger.warning(f"No session found for OAuth state: {state_param[:20]}...")
             
             if not token or not get_session_from_db(token):
                 app.logger.error(f"Session recovery failed completely")
