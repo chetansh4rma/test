@@ -180,7 +180,7 @@ def cleanup_expired_sessions_db():
 smart_defaults = {
     'app_id': 'd0443530-07ed-48e5-a3da-2d6ee3354ef2',
     'api_base': 'https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4/',
-    'redirect_uri': 'https://test-3-1hct.onrender.com/fhir-app/',
+    'redirect_uri': 'http://localhost:8000/fhir-app/',
     'scope': ' '.join([
         'user/Observation.read',
         'user/Observation.write',
@@ -198,16 +198,23 @@ smart_defaults = {
     ])
 }
 
-CLIENT_REDIRECT_URL = 'https://preview--dailycheckin.lovable.app/fhir'
+CLIENT_REDIRECT_URL = 'http://localhost:8080/fhir'
 
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
 
+<<<<<<< Updated upstream
 # Session configuration - optimized for MongoDB persistence and localhost
 app.config['SESSION_PERMANENT'] = True
 app.config['SESSION_USE_SIGNER'] = True  
 app.config['SESSION_COOKIE_SECURE'] = False  # Allow HTTP for localhost development
+=======
+# Production session configuration
+app.config['SESSION_PERMANENT'] = True
+app.config['SESSION_USE_SIGNER'] = True
+app.config['SESSION_COOKIE_SECURE'] = False  # Allow HTTP for local development
+>>>>>>> Stashed changes
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
@@ -301,7 +308,14 @@ def create_new_session():
             
             # Store in Flask session for OAuth callback
             session['session_token'] = token
+<<<<<<< Updated upstream
             session.permanent = True
+=======
+            session.permanent = True  # Make session persistent
+            
+            # Also store a reverse mapping for state-based lookup
+            session_tokens[session_id] = token
+>>>>>>> Stashed changes
             
             app.logger.info(f"Created new session: {token[:8]}... (ID: {session_id})")
             return token
@@ -319,10 +333,34 @@ def cleanup_expired_sessions():
 def cleanup_session(token):
     """Clean up a specific session"""
     try:
+<<<<<<< Updated upstream
         session_data = get_session_from_db(token)
         if session_data:
             # Remove from storage (FHIR client cleanup happens automatically)
             delete_session_from_db(token)
+=======
+        if token in active_sessions:
+            session_data = active_sessions[token]
+            
+            # Reset SMART client if exists
+            try:
+                smart_client = session_data.get('smart_client')
+                if smart_client:
+                    smart_client.reset_patient()
+            except Exception as e:
+                app.logger.error(f"Error resetting SMART client for {token}: {e}")
+            
+            # Remove from storage and clean up reverse mappings
+            session_id = session_data.get('session_id')
+            del active_sessions[token]
+            
+            # Clean up reverse mappings
+            if token in session_tokens:
+                del session_tokens[token]
+            if session_id and session_id in session_tokens:
+                del session_tokens[session_id]
+            
+>>>>>>> Stashed changes
             app.logger.info(f"Cleaned up session: {token[:8]}...")
     except Exception as e:
         app.logger.error(f"Error cleaning up session {token}: {e}")
@@ -367,7 +405,37 @@ def _get_smart(token=None, force_new=False):
             cleanup_session(token)
             return None
         
+<<<<<<< Updated upstream
         # Always recreate FHIR client from stored state (don't store client object directly)
+=======
+        if force_new or not session_data.get('smart_client'):
+            # Create new FHIR client for this session
+            settings = smart_defaults.copy()
+            # Encode session token in state for production recovery
+            state_data = f"{session_data['session_id']}|{token}"
+            settings['state'] = state_data
+            
+            try:
+                smart_client = client.FHIRClient(
+                    settings=settings,
+                    save_func=lambda state: _save_state(state, token)
+                )
+                active_sessions[token]['smart_client'] = smart_client
+                update_session_access(token)
+                app.logger.info(f"Created new FHIR client for session: {token[:8]}...")
+                return smart_client
+            except Exception as e:
+                app.logger.error(f"Error creating FHIR client for {token}: {e}")
+                return None
+        
+        # Return existing client
+        smart_client = session_data.get('smart_client')
+        if smart_client:
+            update_session_access(token)
+            return smart_client
+        
+        # Try to recreate from saved state
+>>>>>>> Stashed changes
         state = session_data.get('state')
         if state and isinstance(state, dict):
             try:
@@ -1260,6 +1328,7 @@ def list_sessions():
 def callback():
     """OAuth2 callback with multi-session support and MongoDB persistence"""
     try:
+<<<<<<< Updated upstream
         # Enhanced session token retrieval with multiple fallbacks
         token = None
         
@@ -1297,6 +1366,81 @@ def callback():
                 return redirect(f"{CLIENT_REDIRECT_URL}?error={encoded_error}")
         
         app.logger.info(f"Using session token: {token[:8]}...")
+=======
+        # Enhanced session token retrieval with fallbacks
+        token = None
+        
+        # First try Flask session (primary method)
+        token = session.get('session_token')
+        
+        # Fallback 1: Try request headers
+        if not token or token not in active_sessions:
+            token = request.headers.get('X-Session-Token')
+        
+        # Fallback 2: Try URL parameter (for debugging)
+        if not token or token not in active_sessions:
+            token = request.args.get('session_token')
+        
+        # Try to recover session token from state parameter (production fix)
+        state_param = request.args.get('state')
+        if state_param and '|' in state_param:
+            try:
+                session_id, encoded_token = state_param.split('|', 1)
+                if encoded_token in active_sessions:
+                    token = encoded_token
+                    app.logger.info(f"Recovered session token from state parameter: {token[:8]}...")
+            except Exception as e:
+                app.logger.error(f"Error parsing state parameter: {e}")
+        
+        # Validate the session state parameter if present
+        if token and token in active_sessions and state_param:
+            session_data = active_sessions[token]
+            expected_session_id = session_data.get('session_id')
+            # Extract session_id from state if it contains token
+            if '|' in state_param:
+                state_session_id = state_param.split('|')[0]
+            else:
+                state_session_id = state_param
+            
+            if state_session_id != expected_session_id:
+                app.logger.error(f"State mismatch for session {token[:8]}: expected {expected_session_id}, got {state_session_id}")
+                token = None
+        
+        if not token or token not in active_sessions:
+            app.logger.error(f"=== SESSION RECOVERY FAILED ===")
+            app.logger.error(f"Token from Flask session: {session.get('session_token')}")
+            app.logger.error(f"Token from headers: {request.headers.get('X-Session-Token')}")
+            app.logger.error(f"Token from URL params: {request.args.get('session_token')}")
+            app.logger.error(f"State parameter: {state_param}")
+            app.logger.error(f"State contains pipe: {'|' in (state_param or '')}")
+            app.logger.error(f"Available sessions count: {len(active_sessions)}")
+            app.logger.error(f"Available session tokens: {[t[:8] + '...' for t in active_sessions.keys()]}")
+            app.logger.error(f"Flask session keys: {list(session.keys())}")
+            app.logger.error(f"Request URL: {request.url}")
+            
+            # Emergency fallback: try to find any session with matching state
+            fallback_token = None
+            if state_param:
+                # Method 1: Use reverse mapping
+                if state_param in session_tokens:
+                    fallback_token = session_tokens[state_param]
+                    app.logger.info(f"FALLBACK 1: Found session via reverse mapping: {fallback_token[:8]}...")
+                else:
+                    # Method 2: Search through all sessions
+                    for session_token, session_data in active_sessions.items():
+                        stored_state = session_data.get('session_id')
+                        if stored_state == state_param:
+                            fallback_token = session_token
+                            app.logger.info(f"FALLBACK 2: Found matching session by state search: {fallback_token[:8]}...")
+                            break
+            
+            if fallback_token:
+                token = fallback_token
+            else:
+                error_data = {'success': False, 'error': 'Invalid session state - please restart the authorization flow'}
+                encoded_error = urllib.parse.quote(json.dumps(error_data))
+                return redirect(f"{CLIENT_REDIRECT_URL}?error={encoded_error}")
+>>>>>>> Stashed changes
         
         smart = _get_smart(token)
         if not smart:
@@ -1594,13 +1738,13 @@ def handle_404(e):
         'session_token': token
     }), 404
 
-# if __name__ == '__main__':
-#     try:
-#         import flaskbeaker
-#         flaskbeaker.FlaskBeaker.setup_app(app)
-#     except Exception as e:
-#         app.logger.warning(f"FlaskBeaker setup failed: {e}")
+if __name__ == '__main__':
+    try:
+        import flaskbeaker
+        flaskbeaker.FlaskBeaker.setup_app(app)
+    except Exception as e:
+        app.logger.warning(f"FlaskBeaker setup failed: {e}")
     
-#     logging.basicConfig(level=logging.DEBUG)
-#     app.run(debug=True, port=8000)
+    logging.basicConfig(level=logging.DEBUG)
+    app.run(debug=True, port=8000)
 
