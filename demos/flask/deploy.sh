@@ -17,16 +17,14 @@ export CLIENT_REDIRECT_URL="https://yourdomain.com/fhir"
 
 # Test MongoDB connection
 echo "🔍 Testing MongoDB connection..."
-python -c "
-from pymongo import MongoClient
-try:
-    client = MongoClient('$MONGODB_URI', serverSelectionTimeoutMS=5000)
-    client.admin.command('ping')
-    print('✅ MongoDB connection successful')
-except Exception as e:
-    print(f'❌ MongoDB connection failed: {e}')
-    exit(1)
-"
+python test_mongodb.py
+
+if [ $? -eq 0 ]; then
+    echo "✅ MongoDB connection test passed"
+else
+    echo "❌ MongoDB connection test failed - check your connection string"
+    exit 1
+fi
 
 # Deploy with Gunicorn
 echo "🚀 Starting Gunicorn server..."

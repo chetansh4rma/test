@@ -52,99 +52,11 @@ except Exception as e:
     db = None
     sessions_collection = None
 
-# Custom MongoDB Session Interface for PyMongo 4.6+ compatibility
-class CustomMongoDBSessionInterface:
-    def __init__(self, app, db, collection_name='flask_sessions'):
-        self.db = db
-        self.collection = db[collection_name]
-        self.key_prefix = 'session:'
-        self.use_signer = app.config.get('SESSION_USE_SIGNER', False)
-        self.permanent = app.config.get('SESSION_PERMANENT', False)
-        self.lifetime = app.config.get('PERMANENT_SESSION_LIFETIME', timedelta(hours=2))
-        
-        # Create TTL index for automatic expiration
-        try:
-            self.collection.create_index("expires_at", expireAfterSeconds=0)
-        except Exception as e:
-            print(f"Warning: Could not create TTL index: {e}")
-    
-    def open_session(self, app, request):
-        sid = request.cookies.get(app.config.get('SESSION_COOKIE_NAME', 'session'))
-        if not sid:
-            return self.session_class()
-        
-        if self.use_signer:
-            signer = self._get_signer(app)
-            if signer is None:
-                return self.session_class()
-            try:
-                sid_as_bytes = signer.unsign(sid)
-                sid = sid_as_bytes.decode()
-            except Exception:
-                sid = None
-        
-        if sid is None:
-            return self.session_class()
-        
-        data = self.collection.find_one({'id': sid})
-        if data is None:
-            return self.session_class()
-        
-        if data.get('expires_at') and datetime.utcnow() > data['expires_at']:
-            self.collection.delete_one({'id': sid})
-            return self.session_class()
-        
-        return self.session_class(initial=data.get('val', {}))
-    
-    def save_session(self, app, session, response):
-        domain = app.config.get('SESSION_COOKIE_DOMAIN')
-        path = app.config.get('SESSION_COOKIE_PATH', '/')
-        secure = app.config.get('SESSION_COOKIE_SECURE', False)
-        httponly = app.config.get('SESSION_COOKIE_HTTPONLY', True)
-        samesite = app.config.get('SESSION_COOKIE_SAMESITE', 'Lax')
-        
-        if not session:
-            if session.modified:
-                self.collection.delete_one({'id': session.sid})
-            return
-        
-        expires = None
-        if self.permanent:
-            expires = datetime.utcnow() + self.lifetime
-        
-        data = {
-            'id': session.sid,
-            'val': dict(session),
-            'expires_at': expires
-        }
-        
-        # Use replace_one with upsert for PyMongo 4.6+ compatibility
-        self.collection.replace_one({'id': session.sid}, data, upsert=True)
-        
-        if session.modified:
-            if self.use_signer:
-                signer = self._get_signer(app)
-                if signer is None:
-                    return
-                sid = signer.sign(session.sid.encode())
-            else:
-                sid = session.sid
-            
-            response.set_cookie(
-                app.config.get('SESSION_COOKIE_NAME', 'session'),
-                sid,
-                expires=expires,
-                httponly=httponly,
-                domain=domain,
-                path=path,
-                secure=secure,
-                samesite=samesite
-            )
-    
-    def _get_signer(self, app):
-        if not app.config.get('SECRET_KEY'):
-            return None
-        return app.config.get('SESSION_SIGNER', None)
+# Initialize custom MongoDB session interface instead of flask-session
+if mongo_client is not None and db is not None:
+    print("✅ MongoDB available - using Flask built-in sessions with MongoDB storage")
+else:
+    print("⚠️ Warning: MongoDB not available, using in-memory storage only")
 
 # Multi-session storage with MongoDB support
 active_sessions = {} if sessions_collection is None else None
@@ -303,12 +215,6 @@ app.config.update(
     # Secret key - use environment variable in production
     SECRET_KEY=os.environ.get('SECRET_KEY', secrets.token_hex(32)),
     
-    # Session configuration for production - Using custom MongoDB interface
-    SESSION_TYPE='mongodb',
-    SESSION_MONGODB=mongo_client,
-    SESSION_MONGODB_DB='fhir_sessions',
-    SESSION_MONGODB_COLLECT='flask_sessions',
-    
     # Cookie settings for cross-site Epic redirects
     SESSION_COOKIE_SECURE=os.environ.get('FLASK_ENV') == 'production',  # HTTPS only in production
     SESSION_COOKIE_HTTPONLY=True,  # Prevent XSS
@@ -318,24 +224,13 @@ app.config.update(
     # Session lifetime and behavior
     PERMANENT_SESSION_LIFETIME=timedelta(hours=2),  # 2 hours
     SESSION_PERMANENT=False,  # Non-permanent sessions
-    SESSION_USE_SIGNER=True,  # Sign session data
-    
-    # MongoDB session settings - Fixed for PyMongo 4.6+
-    SESSION_MONGODB_TTL=7200,  # 2 hours in seconds
-    SESSION_MONGODB_OPTIONS={
-        'maxPoolSize': 10,
-        'serverSelectionTimeoutMS': 5000,
-        'connectTimeoutMS': 5000,
-        'socketTimeoutMS': 5000,
-    }
 )
 
 # Initialize custom MongoDB session interface instead of flask-session
-if mongo_client and db:
-    app.session_interface = CustomMongoDBSessionInterface(app, db, 'flask_sessions')
-    print("Using custom MongoDB session interface")
+if mongo_client is not None and db is not None:
+    print("✅ MongoDB available - using Flask built-in sessions with MongoDB storage")
 else:
-    print("Warning: Using default Flask session interface (in-memory)")
+    print("⚠️ Warning: MongoDB not available, using in-memory storage only")
 
 # CORS configuration for production
 CORS(app, 
