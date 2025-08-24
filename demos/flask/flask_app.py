@@ -18,6 +18,7 @@ from fhirclient.models.fhirdatetime import FHIRDateTime
 
 from flask import Flask, request, redirect, session, jsonify
 from flask_cors import CORS, cross_origin
+from flask_session import Session
 from datetime import datetime, timedelta
 import urllib.parse
 import json
@@ -198,29 +199,50 @@ smart_defaults = {
     ])
 }
 
-CLIENT_REDIRECT_URL = 'http://localhost:8080/fhir'
-
+# Use environment variable for client redirect URL in production
+CLIENT_REDIRECT_URL = os.environ.get('CLIENT_REDIRECT_URL', 'http://localhost:8080/fhir')
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)
 
-<<<<<<< Updated upstream
-# Session configuration - optimized for MongoDB persistence and localhost
-app.config['SESSION_PERMANENT'] = True
-app.config['SESSION_USE_SIGNER'] = True  
-app.config['SESSION_COOKIE_SECURE'] = False  # Allow HTTP for localhost development
-=======
-# Production session configuration
-app.config['SESSION_PERMANENT'] = True
-app.config['SESSION_USE_SIGNER'] = True
-app.config['SESSION_COOKIE_SECURE'] = False  # Allow HTTP for local development
->>>>>>> Stashed changes
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
+# ===== PRODUCTION-READY SESSION CONFIGURATION =====
+# Use environment variables for production settings
+app.config.update(
+    # Secret key - use environment variable in production
+    SECRET_KEY=os.environ.get('SECRET_KEY', secrets.token_hex(32)),
+    
+    # Session configuration for production
+    SESSION_TYPE='mongodb',
+    SESSION_MONGODB=mongo_client,
+    SESSION_MONGODB_DB='fhir_sessions',
+    SESSION_MONGODB_COLLECT='flask_sessions',
+    
+    # Cookie settings for cross-site Epic redirects
+    SESSION_COOKIE_SECURE=os.environ.get('FLASK_ENV') == 'production',  # HTTPS only in production
+    SESSION_COOKIE_HTTPONLY=True,  # Prevent XSS
+    SESSION_COOKIE_SAMESITE='None' if os.environ.get('FLASK_ENV') == 'production' else 'Lax',  # Allow cross-site redirects from Epic in production
+    SESSION_COOKIE_DOMAIN=None,  # Let Flask determine domain
+    
+    # Session lifetime and behavior
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=2),  # 2 hours
+    SESSION_PERMANENT=False,  # Non-permanent sessions
+    SESSION_USE_SIGNER=True,  # Sign session data
+    
+    # MongoDB session settings
+    SESSION_MONGODB_TTL=7200,  # 2 hours in seconds
+    SESSION_MONGODB_OPTIONS={
+        'maxPoolSize': 10,
+        'serverSelectionTimeoutMS': 5000,
+        'connectTimeoutMS': 5000,
+        'socketTimeoutMS': 5000,
+    }
+)
 
+# Initialize Flask-Session with MongoDB backend
+Session(app)
+
+# CORS configuration for production
 CORS(app, 
-     origins="*",
+     origins=os.environ.get('ALLOWED_ORIGINS', '*').split(','),
      supports_credentials=True,
      allow_headers=['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'Cache-Control', 'X-File-Name', 'X-Session-Token'],
      methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH', 'HEAD'],
@@ -306,16 +328,8 @@ def create_new_session():
             # Save to MongoDB or in-memory storage
             save_session_to_db(token, session_data)
             
-            # Store in Flask session for OAuth callback
+            # Store in Flask-Session (MongoDB backed) for OAuth callback
             session['session_token'] = token
-<<<<<<< Updated upstream
-            session.permanent = True
-=======
-            session.permanent = True  # Make session persistent
-            
-            # Also store a reverse mapping for state-based lookup
-            session_tokens[session_id] = token
->>>>>>> Stashed changes
             
             app.logger.info(f"Created new session: {token[:8]}... (ID: {session_id})")
             return token
@@ -333,34 +347,10 @@ def cleanup_expired_sessions():
 def cleanup_session(token):
     """Clean up a specific session"""
     try:
-<<<<<<< Updated upstream
         session_data = get_session_from_db(token)
         if session_data:
             # Remove from storage (FHIR client cleanup happens automatically)
             delete_session_from_db(token)
-=======
-        if token in active_sessions:
-            session_data = active_sessions[token]
-            
-            # Reset SMART client if exists
-            try:
-                smart_client = session_data.get('smart_client')
-                if smart_client:
-                    smart_client.reset_patient()
-            except Exception as e:
-                app.logger.error(f"Error resetting SMART client for {token}: {e}")
-            
-            # Remove from storage and clean up reverse mappings
-            session_id = session_data.get('session_id')
-            del active_sessions[token]
-            
-            # Clean up reverse mappings
-            if token in session_tokens:
-                del session_tokens[token]
-            if session_id and session_id in session_tokens:
-                del session_tokens[session_id]
-            
->>>>>>> Stashed changes
             app.logger.info(f"Cleaned up session: {token[:8]}...")
     except Exception as e:
         app.logger.error(f"Error cleaning up session {token}: {e}")
@@ -405,37 +395,7 @@ def _get_smart(token=None, force_new=False):
             cleanup_session(token)
             return None
         
-<<<<<<< Updated upstream
         # Always recreate FHIR client from stored state (don't store client object directly)
-=======
-        if force_new or not session_data.get('smart_client'):
-            # Create new FHIR client for this session
-            settings = smart_defaults.copy()
-            # Encode session token in state for production recovery
-            state_data = f"{session_data['session_id']}|{token}"
-            settings['state'] = state_data
-            
-            try:
-                smart_client = client.FHIRClient(
-                    settings=settings,
-                    save_func=lambda state: _save_state(state, token)
-                )
-                active_sessions[token]['smart_client'] = smart_client
-                update_session_access(token)
-                app.logger.info(f"Created new FHIR client for session: {token[:8]}...")
-                return smart_client
-            except Exception as e:
-                app.logger.error(f"Error creating FHIR client for {token}: {e}")
-                return None
-        
-        # Return existing client
-        smart_client = session_data.get('smart_client')
-        if smart_client:
-            update_session_access(token)
-            return smart_client
-        
-        # Try to recreate from saved state
->>>>>>> Stashed changes
         state = session_data.get('state')
         if state and isinstance(state, dict):
             try:
@@ -1326,121 +1286,39 @@ def list_sessions():
 @app.route('/fhir-app/')
 @cross_origin()
 def callback():
-    """OAuth2 callback with multi-session support and MongoDB persistence"""
+    """OAuth2 callback with MongoDB session support"""
     try:
-<<<<<<< Updated upstream
-        # Enhanced session token retrieval with multiple fallbacks
-        token = None
-        
-        # Try Flask session first (primary method)
+        # Get session token from Flask-Session (MongoDB backed)
         token = session.get('session_token')
         
-        # Try headers as fallback
+        # If no session token, try to recover from OAuth state
         if not token:
-            token = request.headers.get('X-Session-Token')
-        
-        # Try URL parameter for debugging
-        if not token:
-            token = request.args.get('session_token')
-        
-        # Validate token exists in storage
-        if not token or not get_session_from_db(token):
-            # Try to recover from state parameter if available
             state_param = request.args.get('state')
             if state_param:
                 app.logger.warning(f"Attempting session recovery with state: {state_param[:20]}...")
                 recovered_token = find_session_by_oauth_state(state_param)
                 if recovered_token:
                     token = recovered_token
-                    app.logger.info(f"Successfully recovered session: {token[:8]}...")
-                    # Update Flask session with recovered token
+                    # Store in Flask-Session for future requests
                     session['session_token'] = token
-                    session.permanent = True
+                    app.logger.info(f"Successfully recovered session: {token[:8]}...")
                 else:
                     app.logger.warning(f"No session found for OAuth state: {state_param[:20]}...")
-            
-            if not token or not get_session_from_db(token):
-                app.logger.error(f"Session recovery failed completely")
-                error_data = {'success': False, 'error': 'Invalid session state - please restart the authorization flow'}
-                encoded_error = urllib.parse.quote(json.dumps(error_data))
-                return redirect(f"{CLIENT_REDIRECT_URL}?error={encoded_error}")
+        
+        # If still no token, create new session
+        if not token:
+            token = create_new_session()
+            session['session_token'] = token
+            app.logger.info(f"Created new session for OAuth callback: {token[:8]}...")
+        
+        # Validate token exists in storage
+        if not get_session_from_db(token):
+            app.logger.error(f"Session validation failed for token: {token[:8]}...")
+            error_data = {'success': False, 'error': 'Invalid session state - please restart the authorization flow'}
+            encoded_error = urllib.parse.quote(json.dumps(error_data))
+            return redirect(f"{CLIENT_REDIRECT_URL}?error={encoded_error}")
         
         app.logger.info(f"Using session token: {token[:8]}...")
-=======
-        # Enhanced session token retrieval with fallbacks
-        token = None
-        
-        # First try Flask session (primary method)
-        token = session.get('session_token')
-        
-        # Fallback 1: Try request headers
-        if not token or token not in active_sessions:
-            token = request.headers.get('X-Session-Token')
-        
-        # Fallback 2: Try URL parameter (for debugging)
-        if not token or token not in active_sessions:
-            token = request.args.get('session_token')
-        
-        # Try to recover session token from state parameter (production fix)
-        state_param = request.args.get('state')
-        if state_param and '|' in state_param:
-            try:
-                session_id, encoded_token = state_param.split('|', 1)
-                if encoded_token in active_sessions:
-                    token = encoded_token
-                    app.logger.info(f"Recovered session token from state parameter: {token[:8]}...")
-            except Exception as e:
-                app.logger.error(f"Error parsing state parameter: {e}")
-        
-        # Validate the session state parameter if present
-        if token and token in active_sessions and state_param:
-            session_data = active_sessions[token]
-            expected_session_id = session_data.get('session_id')
-            # Extract session_id from state if it contains token
-            if '|' in state_param:
-                state_session_id = state_param.split('|')[0]
-            else:
-                state_session_id = state_param
-            
-            if state_session_id != expected_session_id:
-                app.logger.error(f"State mismatch for session {token[:8]}: expected {expected_session_id}, got {state_session_id}")
-                token = None
-        
-        if not token or token not in active_sessions:
-            app.logger.error(f"=== SESSION RECOVERY FAILED ===")
-            app.logger.error(f"Token from Flask session: {session.get('session_token')}")
-            app.logger.error(f"Token from headers: {request.headers.get('X-Session-Token')}")
-            app.logger.error(f"Token from URL params: {request.args.get('session_token')}")
-            app.logger.error(f"State parameter: {state_param}")
-            app.logger.error(f"State contains pipe: {'|' in (state_param or '')}")
-            app.logger.error(f"Available sessions count: {len(active_sessions)}")
-            app.logger.error(f"Available session tokens: {[t[:8] + '...' for t in active_sessions.keys()]}")
-            app.logger.error(f"Flask session keys: {list(session.keys())}")
-            app.logger.error(f"Request URL: {request.url}")
-            
-            # Emergency fallback: try to find any session with matching state
-            fallback_token = None
-            if state_param:
-                # Method 1: Use reverse mapping
-                if state_param in session_tokens:
-                    fallback_token = session_tokens[state_param]
-                    app.logger.info(f"FALLBACK 1: Found session via reverse mapping: {fallback_token[:8]}...")
-                else:
-                    # Method 2: Search through all sessions
-                    for session_token, session_data in active_sessions.items():
-                        stored_state = session_data.get('session_id')
-                        if stored_state == state_param:
-                            fallback_token = session_token
-                            app.logger.info(f"FALLBACK 2: Found matching session by state search: {fallback_token[:8]}...")
-                            break
-            
-            if fallback_token:
-                token = fallback_token
-            else:
-                error_data = {'success': False, 'error': 'Invalid session state - please restart the authorization flow'}
-                encoded_error = urllib.parse.quote(json.dumps(error_data))
-                return redirect(f"{CLIENT_REDIRECT_URL}?error={encoded_error}")
->>>>>>> Stashed changes
         
         smart = _get_smart(token)
         if not smart:
@@ -1737,6 +1615,52 @@ def handle_404(e):
         'message': 'The requested endpoint was not found',
         'session_token': token
     }), 404
+
+@app.route('/api/debug-session')
+@cross_origin()
+def debug_session():
+    """Debug current session state"""
+    try:
+        current_token = session.get('session_token')
+        session_data = get_session_from_db(current_token) if current_token else None
+        
+        return jsonify({
+            'session_token': current_token[:8] + "..." if current_token else None,
+            'session_data_exists': session_data is not None,
+            'flask_session_keys': list(session.keys()),
+            'mongodb_connected': mongo_client is not None,
+            'session_type': 'flask-session-mongodb',
+            'environment': os.environ.get('FLASK_ENV', 'development'),
+            'cookie_secure': app.config.get('SESSION_COOKIE_SECURE'),
+            'cookie_samesite': app.config.get('SESSION_COOKIE_SAMESITE'),
+            'session_permanent': app.config.get('SESSION_PERMANENT')
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/debug-sessions')
+@cross_origin()
+def debug_sessions():
+    """Debug endpoint to verify MongoDB session storage"""
+    try:
+        # Check Flask-Session MongoDB collection
+        flask_sessions = list(db['flask_sessions'].find({}, {'_id': 0, 'data': 0}))
+        
+        # Check custom sessions collection
+        custom_sessions = list(sessions_collection.find({}, {'_id': 0, 'data': 0}))
+        
+        return jsonify({
+            'flask_sessions_count': len(flask_sessions),
+            'custom_sessions_count': len(custom_sessions),
+            'flask_sessions': flask_sessions[:5],  # Show first 5
+            'custom_sessions': custom_sessions[:5],  # Show first 5
+            'mongodb_connected': mongo_client is not None,
+            'session_type': app.config.get('SESSION_TYPE'),
+            'session_mongodb_db': app.config.get('SESSION_MONGODB_DB'),
+            'session_mongodb_collect': app.config.get('SESSION_MONGODB_COLLECT')
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     try:
