@@ -1654,13 +1654,13 @@ def debug_sessions():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-if __name__ == '__main__':
-    try:
-        import flaskbeaker
-        flaskbeaker.FlaskBeaker.setup_app(app)
-    except Exception as e:
-        app.logger.warning(f"FlaskBeaker setup failed: {e}")
+# if __name__ == '__main__':
+#     try:
+#         import flaskbeaker
+#         flaskbeaker.FlaskBeaker.setup_app(app)
+#     except Exception as e:
+#         app.logger.warning(f"FlaskBeaker setup failed: {e}")
     
-    logging.basicConfig(level=logging.DEBUG)
-    app.run(debug=True, port=8000)
+#     logging.basicConfig(level=logging.DEBUG)
+#     app.run(debug=True, port=8000)
 
