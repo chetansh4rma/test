@@ -34,7 +34,7 @@ load_dotenv()
 
 # MongoDB connection for session storage
 try:
-    MONGODB_URI = os.environ.get('MONGODB_URI', 'mongodb://localhost:27017/')
+    MONGODB_URI = os.environ.get('MONGODB_URI', 'mongodb+srv://chetansharma9878600494:VibJosueveTfLF5V@cluster0.te5mtud.mongodb.net/')
     mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
     # Test connection
     mongo_client.admin.command('ping')
