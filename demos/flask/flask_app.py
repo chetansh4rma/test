@@ -186,7 +186,7 @@ def cleanup_expired_sessions_db():
 smart_defaults = {
     'app_id': 'd0443530-07ed-48e5-a3da-2d6ee3354ef2',
     'api_base': 'https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4/',
-    'redirect_uri': 'http://localhost:8000/fhir-app/',
+    'redirect_uri': 'https://test-3-1hct.onrender.com/fhir-app/',
     'scope': ' '.join([
         'user/Observation.read',
         'user/Observation.write',
