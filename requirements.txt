@@ -2,6 +2,5 @@ beaker>=1.13.0
 fhirclient>=4.3
 flask>=2.3.2
 gunicorn
-python-dotenv==1.0.0
-
-
+python-dotenv
+pymongo
