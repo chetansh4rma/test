@@ -24,14 +24,116 @@ import json
 import secrets
 import uuid
 import threading
+import os
+from dotenv import load_dotenv
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure
 
-# Multi-session storage (use Redis/DB in production)
-active_sessions = {}
-session_tokens = {}
+# Load environment variables from .env file
+load_dotenv()
+
+# MongoDB connection for session storage
+try:
+    MONGODB_URI = os.environ.get('MONGODB_URI', 'mongodb://localhost:27017/')
+    mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+    # Test connection
+    mongo_client.admin.command('ping')
+    db = mongo_client['fhir_sessions']
+    sessions_collection = db['sessions']
+    print(f"Connected to MongoDB at {MONGODB_URI}")
+    
+    # Create index for better performance
+    sessions_collection.create_index("token", unique=True)
+    sessions_collection.create_index("expires_at")
+    
+except Exception as e:
+    print(f"MongoDB connection failed, using in-memory storage: {e}")
+    mongo_client = None
+    db = None
+    sessions_collection = None
+
+# Multi-session storage with MongoDB support
+active_sessions = {} if sessions_collection is None else None
+session_tokens = {} if sessions_collection is None else None
 session_lock = threading.Lock()
 
 # Maximum number of concurrent sessions
 MAX_SESSIONS = 100000000000000000000000
+
+# MongoDB session helper functions
+def get_session_from_db(token):
+    """Get session data from MongoDB or in-memory storage"""
+    if sessions_collection is None:
+        return active_sessions.get(token)
+    
+    try:
+        session_doc = sessions_collection.find_one({'token': token})
+        if session_doc and session_doc.get('expires_at', datetime.now()) > datetime.now():
+            return session_doc['data']
+        elif session_doc:
+            # Clean up expired session
+            sessions_collection.delete_one({'token': token})
+        return None
+    except Exception as e:
+        print(f"Error getting session from DB: {e}")
+        return None
+
+def save_session_to_db(token, data):
+    """Save session data to MongoDB or in-memory storage"""
+    if sessions_collection is None:
+        active_sessions[token] = data
+        return
+    
+    try:
+        session_doc = {
+            'token': token,
+            'data': data,
+            'expires_at': data.get('expires_at', datetime.now() + timedelta(hours=2)),
+            'created_at': data.get('created_at', datetime.now()),
+            'last_accessed': datetime.now()
+        }
+        sessions_collection.replace_one(
+            {'token': token}, 
+            session_doc, 
+            upsert=True
+        )
+    except Exception as e:
+        print(f"Error saving session to DB: {e}")
+
+def delete_session_from_db(token):
+    """Delete session from MongoDB or in-memory storage"""
+    if sessions_collection is None:
+        if token in active_sessions:
+            del active_sessions[token]
+        if token in session_tokens:
+            del session_tokens[token]
+        return
+    
+    try:
+        sessions_collection.delete_one({'token': token})
+    except Exception as e:
+        print(f"Error deleting session from DB: {e}")
+
+def cleanup_expired_sessions_db():
+    """Clean up expired sessions from MongoDB or in-memory storage"""
+    if sessions_collection is None:
+        # Fallback to in-memory cleanup
+        now = datetime.now()
+        expired_tokens = [
+            token for token, data in active_sessions.items()
+            if now > data.get('expires_at', now)
+        ]
+        for token in expired_tokens:
+            if token in active_sessions:
+                del active_sessions[token]
+        return
+    
+    try:
+        result = sessions_collection.delete_many({'expires_at': {'$lte': datetime.now()}})
+        if result.deleted_count > 0:
+            print(f"Cleaned up {result.deleted_count} expired sessions from MongoDB")
+    except Exception as e:
+        print(f"Error cleaning up expired sessions: {e}")
 
 # app setup with complete OAuth scopes for Epic FHIR
 smart_defaults = {
@@ -57,8 +159,17 @@ smart_defaults = {
 
 CLIENT_REDIRECT_URL = 'https://preview--dailycheckin.lovable.app/fhir'
 
+
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
+
+# Session configuration - optimized for MongoDB persistence and localhost
+app.config['SESSION_PERMANENT'] = True
+app.config['SESSION_USE_SIGNER'] = True  
+app.config['SESSION_COOKIE_SECURE'] = False  # Allow HTTP for localhost development
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
 
 CORS(app, 
      origins="*",
@@ -107,12 +218,12 @@ def get_session_token():
     try:
         # Try to get from headers first (for API calls)
         token = request.headers.get('X-Session-Token')
-        if token and token in active_sessions:
+        if token and get_session_from_db(token):
             return token
         
         # Try to get from session (for OAuth callback)
         token = session.get('session_token')
-        if token and token in active_sessions:
+        if token and get_session_from_db(token):
             return token
         
         # Create new token if none exists or is invalid
@@ -126,24 +237,15 @@ def create_new_session():
     try:
         with session_lock:
             # Clean up expired sessions first
-            cleanup_expired_sessions()
-            
-            # Check if we're at max capacity
-            if len(active_sessions) >= MAX_SESSIONS:
-                # Remove oldest session to make room
-                oldest_token = min(active_sessions.keys(), 
-                                 key=lambda k: active_sessions[k].get('created_at', datetime.now()))
-                cleanup_session(oldest_token)
-                app.logger.info(f"Removed oldest session {oldest_token} to make room")
+            cleanup_expired_sessions_db()
             
             # Generate new token and session
             token = generate_session_token()
             session_id = str(uuid.uuid4())
             
-            active_sessions[token] = {
+            session_data = {
                 'session_id': session_id,
                 'state': None,
-                'smart_client': None,
                 'patient_data': None,
                 'access_token': None,
                 'refresh_token': None,
@@ -153,8 +255,12 @@ def create_new_session():
                 'last_accessed': datetime.now()
             }
             
+            # Save to MongoDB or in-memory storage
+            save_session_to_db(token, session_data)
+            
             # Store in Flask session for OAuth callback
             session['session_token'] = token
+            session.permanent = True
             
             app.logger.info(f"Created new session: {token[:8]}... (ID: {session_id})")
             return token
@@ -163,42 +269,19 @@ def create_new_session():
         return f"fallback_{int(datetime.now().timestamp() * 1000)}"
 
 def cleanup_expired_sessions():
-    """Clean up expired sessions"""
+    """Clean up expired sessions - delegates to MongoDB function"""
     try:
-        now = datetime.now()
-        expired_tokens = [
-            token for token, data in active_sessions.items()
-            if now > data.get('expires_at', now)
-        ]
-        
-        for token in expired_tokens:
-            cleanup_session(token)
-            
-        if expired_tokens:
-            app.logger.info(f"Cleaned up {len(expired_tokens)} expired sessions")
+        cleanup_expired_sessions_db()
     except Exception as e:
         app.logger.error(f"Error cleaning up expired sessions: {e}")
 
 def cleanup_session(token):
     """Clean up a specific session"""
     try:
-        if token in active_sessions:
-            session_data = active_sessions[token]
-            
-            # Reset SMART client if exists
-            try:
-                smart_client = session_data.get('smart_client')
-                if smart_client:
-                    smart_client.reset_patient()
-            except Exception as e:
-                app.logger.error(f"Error resetting SMART client for {token}: {e}")
-            
-            # Remove from storage
-            del active_sessions[token]
-            
-            if token in session_tokens:
-                del session_tokens[token]
-            
+        session_data = get_session_from_db(token)
+        if session_data:
+            # Remove from storage (FHIR client cleanup happens automatically)
+            delete_session_from_db(token)
             app.logger.info(f"Cleaned up session: {token[:8]}...")
     except Exception as e:
         app.logger.error(f"Error cleaning up session {token}: {e}")
@@ -206,17 +289,21 @@ def cleanup_session(token):
 def update_session_access(token):
     """Update last accessed time for session"""
     try:
-        if token in active_sessions:
-            active_sessions[token]['last_accessed'] = datetime.now()
+        session_data = get_session_from_db(token)
+        if session_data:
+            session_data['last_accessed'] = datetime.now()
+            save_session_to_db(token, session_data)
     except Exception as e:
         app.logger.error(f"Error updating session access: {e}")
 
 def _save_state(state, token):
     """Save FHIR client state for specific session"""
     try:
-        if token in active_sessions:
-            active_sessions[token]['state'] = state
-            update_session_access(token)
+        session_data = get_session_from_db(token)
+        if session_data:
+            session_data['state'] = state
+            session_data['last_accessed'] = datetime.now()
+            save_session_to_db(token, session_data)
             app.logger.info(f"Saved state for session: {token[:8]}...")
     except Exception as e:
         app.logger.error(f"Error saving state for {token}: {e}")
@@ -227,56 +314,48 @@ def _get_smart(token=None, force_new=False):
         if not token:
             token = get_session_token()
         
-        if token not in active_sessions:
+        session_data = get_session_from_db(token)
+        if not session_data:
             return None
-        
-        session_data = active_sessions[token]
         
         # Check if session is expired
         if datetime.now() > session_data.get('expires_at', datetime.now()):
             cleanup_session(token)
             return None
         
-        if force_new or not session_data.get('smart_client'):
-            # Create new FHIR client for this session
-            settings = smart_defaults.copy()
-            settings['state'] = session_data['session_id']
-            
-            try:
-                smart_client = client.FHIRClient(
-                    settings=settings,
-                    save_func=lambda state: _save_state(state, token)
-                )
-                active_sessions[token]['smart_client'] = smart_client
-                update_session_access(token)
-                app.logger.info(f"Created new FHIR client for session: {token[:8]}...")
-                return smart_client
-            except Exception as e:
-                app.logger.error(f"Error creating FHIR client for {token}: {e}")
-                return None
-        
-        # Return existing client
-        smart_client = session_data.get('smart_client')
-        if smart_client:
-            update_session_access(token)
-            return smart_client
-        
-        # Try to recreate from saved state
+        # Always recreate FHIR client from stored state (don't store client object directly)
         state = session_data.get('state')
-        if state:
+        if state and isinstance(state, dict):
             try:
+                # Recreate client from saved state
                 smart_client = client.FHIRClient(
                     state=state,
                     save_func=lambda state: _save_state(state, token)
                 )
-                active_sessions[token]['smart_client'] = smart_client
                 update_session_access(token)
+                app.logger.info(f"Recreated FHIR client from state for session: {token[:8]}...")
                 return smart_client
             except Exception as e:
                 app.logger.error(f"Error recreating FHIR client from state for {token}: {e}")
-                return None
+                # Fall through to create new client
         
-        return None
+        # Create completely new FHIR client
+        settings = smart_defaults.copy()
+        # Create state with session ID and token for recovery
+        state_data = f"{session_data['session_id']}|{token}"
+        settings['state'] = state_data
+        
+        try:
+            smart_client = client.FHIRClient(
+                settings=settings,
+                save_func=lambda state: _save_state(state, token)
+            )
+            update_session_access(token)
+            app.logger.info(f"Created new FHIR client for session: {token[:8]}...")
+            return smart_client
+        except Exception as e:
+            app.logger.error(f"Error creating FHIR client for {token}: {e}")
+            return None
     except Exception as e:
         app.logger.error(f"Error in _get_smart: {e}")
         return None
@@ -287,7 +366,7 @@ def _logout(token=None):
         if not token:
             token = get_session_token()
         
-        if token in active_sessions:
+        if get_session_from_db(token):
             cleanup_session(token)
             app.logger.info(f"Logged out session: {token[:8]}...")
     except Exception as e:
@@ -299,15 +378,15 @@ def _reset_session(token=None):
         if not token:
             token = get_session_token()
         
-        if token in active_sessions:
-            session_data = active_sessions[token]
+        session_data = get_session_from_db(token)
+        if session_data:
             session_data['state'] = None
-            session_data['smart_client'] = None
             session_data['patient_data'] = None
             session_data['access_token'] = None
             session_data['refresh_token'] = None
             session_data['token_expires_at'] = None
             session_data['last_accessed'] = datetime.now()
+            save_session_to_db(token, session_data)
             app.logger.info(f"Reset session: {token[:8]}...")
     except Exception as e:
         app.logger.error(f"Error resetting session: {e}")
@@ -1133,16 +1212,38 @@ def list_sessions():
 @app.route('/fhir-app/')
 @cross_origin()
 def callback():
-    """OAuth2 callback with multi-session support"""
+    """OAuth2 callback with multi-session support and MongoDB persistence"""
     try:
-        # Get session token from Flask session (set during auth-url call)
+        # Enhanced session token retrieval with multiple fallbacks
+        token = None
+        
+        # Try Flask session first (primary method)
         token = session.get('session_token')
         
-        if not token or token not in active_sessions:
-            app.logger.error(f"No valid session token found in callback: {token}")
-            error_data = {'success': False, 'error': 'Invalid session state'}
-            encoded_error = urllib.parse.quote(json.dumps(error_data))
-            return redirect(f"{CLIENT_REDIRECT_URL}?error={encoded_error}")
+        # Try headers as fallback
+        if not token:
+            token = request.headers.get('X-Session-Token')
+        
+        # Try URL parameter for debugging
+        if not token:
+            token = request.args.get('session_token')
+        
+        # Validate token exists in storage
+        if not token or not get_session_from_db(token):
+            # Try to recover from state parameter if available
+            state_param = request.args.get('state')
+            if state_param:
+                app.logger.warning(f"Attempting session recovery with state: {state_param[:20]}...")
+                # For now, create emergency session as last resort
+                token = create_new_session()
+            
+            if not token or not get_session_from_db(token):
+                app.logger.error(f"Session recovery failed completely")
+                error_data = {'success': False, 'error': 'Invalid session state - please restart the authorization flow'}
+                encoded_error = urllib.parse.quote(json.dumps(error_data))
+                return redirect(f"{CLIENT_REDIRECT_URL}?error={encoded_error}")
+        
+        app.logger.info(f"Using session token: {token[:8]}...")
         
         smart = _get_smart(token)
         if not smart:
@@ -1254,7 +1355,7 @@ def index():
         
         <div class="section multi-session-info">
             <h2>🔄 Multi-Session FHIR Server</h2>
-            <p><strong>Active Sessions:</strong> {len(active_sessions)}/{MAX_SESSIONS}</p>
+            <p><strong>Active Sessions:</strong> {len(get_all_sessions())}/{MAX_SESSIONS}</p>
             <p><strong>Current Session:</strong> <span class="token">{token[:8] + '...' if token else 'None'}</span></p>
             <p><strong>Session Isolation:</strong> ✅ Each session is completely independent</p>
             <button class="btn-primary" onclick="window.open('/api/auth-url', '_blank')">🔗 New Session (New Tab)</button>
@@ -1404,9 +1505,11 @@ def reset():
 def manual_cleanup():
     """Manual cleanup endpoint for testing"""
     try:
-        old_count = len(active_sessions)
-        cleanup_expired_sessions()
-        new_count = len(active_sessions)
+        all_sessions_before = get_all_sessions()
+        old_count = len(all_sessions_before)
+        cleanup_expired_sessions_db()
+        all_sessions_after = get_all_sessions() 
+        new_count = len(all_sessions_after)
         
         return jsonify({
             'success': True,
