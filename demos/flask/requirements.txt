@@ -3,3 +3,5 @@ fhirclient>=4.3
 Flask-Cors
 flask>=2.3.2
 gunicorn
+python-dotenv
+pymongo
